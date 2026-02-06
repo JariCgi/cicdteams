@@ -1,4 +1,4 @@
-name: CI (Pages deploy, separate feed)
+name: CI → RSS (single feed)
 
 on:
   push:
@@ -12,11 +12,11 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages-ci"
+  group: "pages-single-feed"
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy-ci:
+  ci_to_rss:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -26,59 +26,75 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Simuloitu build/test (korvaa omilla komennoilla) ---
-      - name: Build
+      # (Simuloi build/test tarvittaessa)
+      - name: Build & Test (noop)
         run: |
-          echo "Running build..."
+          echo "Build & tests..."
+          # exit 1  # poista kommentti testataksesi failurea
           sleep 1
 
-      - name: Tests
+      # --- GENEROI/APPEND RSS feediin yhden <item>:n CI-statuksella ---
+      - name: Generate/Append feed.xml (CI)
+        if: always()
+        shell: bash
         run: |
-          echo "Running tests..."
-          # exit 1  # testaa failurea poistamalla kommentti
-          sleep 1
-
-      # --- Generoi CI-RSS public/feed/ci.xml ---
-      - name: Generate CI RSS
-        if: always()   # päivitä feed myös epäonnistumisissa
-        run: |
+          set -euo pipefail
           mkdir -p public/feed
-          DATE=$(date -u +"%a, %d %b %Y %H:%M:%S GMT")
+
+          FEED_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/feed/feed.xml"
+          LOCAL_FEED="public/feed/feed.xml"
+
+          # Lataa olemassa oleva feed, jos löytyy (ei virhettä jos 404)
+          if curl -fsS "$FEED_URL" -o "$LOCAL_FEED.old" ; then
+            echo "Existing feed downloaded."
+          else
+            echo "No existing feed found; creating new."
+            cat > "$LOCAL_FEED.old" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>CI/CD Notifications</title>
+    <link></link>
+    <description>CI/CD status feed (single)</description>
+  </channel>
+</rss>
+EOF
+          fi
+
+          DATE="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
           STATUS="${{ job.status }}"
           if [ "$STATUS" = "success" ]; then
             TITLE="✅ CI: build & test onnistui"
-            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           elif [ "$STATUS" = "cancelled" ]; then
             TITLE="⏸️ CI: peruttu"
-            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           else
             TITLE="❌ CI: build/test epäonnistui"
-            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           fi
 
-          cat > public/feed/ci.xml <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <rss version="2.0">
-            <channel>
-              <title>CI Notifications</title>
-              <link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
-              <description>CI status feed</description>
-              <item>
-                <title>$TITLE</title>
-                <description>$DESC</description>
-                <pubDate>$DATE</pubDate>
-                <guid isPermaLink="false">${{ github.run_id }}-ci</guid>
-                <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
-              </item>
-            </channel>
-          </rss>
-          EOF
+          # Uusi item (lisätään listan alkuun)
+          NEW_ITEM=$(cat <<EOF
+    <item>
+      <title>$TITLE</title>
+      <description>$DESC</description>
+      <pubDate>$DATE</pubDate>
+      <guid isPermaLink="false">${{ github.run_id }}-ci</guid>
+      <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
+      <category>CI</category>
+    </item>
+EOF
+          )
 
-      - name: Upload Pages artifact (CI)
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-      - name: Deploy to GitHub Pages (CI)
-        id: deploy
-        uses: actions/deploy-pages@v4
+          # Rakenna uusi feed:
+          # - kopioi header (rss/channel alku)
+          # - upota NEW_ITEM
+          # - kopioi olemassa olevat itemit (max 19 kpl)
+          # - sulje channel/rss
+          awk -v newitem="$NEW_ITEM" '
+            BEGIN{printHeader=1; itemCount=0}
+            /<channel>/ {print; next}
+            printHeader && /<description>/ {
+              print;
+              # Aseta <link> kanavatasolle
