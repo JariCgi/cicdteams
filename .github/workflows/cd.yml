@@ -1,4 +1,4 @@
-name: CD (Pages deploy, separate feed)
+name: CD → RSS (single feed)
 
 on:
   push:
@@ -11,11 +11,11 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages-cd"
+  group: "pages-single-feed"
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy-cd:
+  cd_to_rss:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -25,54 +25,78 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Simuloitu deploy (korvaa omilla komennoilla) ---
+      # (Simuloitu deploy)
       - name: Deploy (noop)
         run: |
           echo "Deploying..."
-          # exit 1  # testaa failurea poistamalla kommentti
+          # exit 1  # poista kommentti testataksesi failurea
           sleep 1
 
-      # --- Generoi CD-RSS public/feed/cd.xml ---
-      - name: Generate CD RSS
+      - name: Generate/Append feed.xml (CD)
         if: always()
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p public/feed
-          DATE=$(date -u +"%a, %d %b %Y %H:%M:%S GMT")
+
+          FEED_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/feed/feed.xml"
+          LOCAL_FEED="public/feed/feed.xml"
+
+          if curl -fsS "$FEED_URL" -o "$LOCAL_FEED.old" ; then
+            echo "Existing feed downloaded."
+          else
+            echo "No existing feed found; creating new."
+            cat > "$LOCAL_FEED.old" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>CI/CD Notifications</title>
+    <link></link>
+    <description>CI/CD status feed (single)</description>
+  </channel>
+</rss>
+EOF
+          fi
+
+          DATE="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
           STATUS="${{ job.status }}"
           if [ "$STATUS" = "success" ]; then
             TITLE="🚀 CD: deploy onnistui"
-            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           elif [ "$STATUS" = "cancelled" ]; then
             TITLE="⏸️ CD: deploy peruttu"
-            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           else
             TITLE="🔥 CD: deploy epäonnistui"
-            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           fi
 
-          cat > public/feed/cd.xml <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <rss version="2.0">
-            <channel>
-              <title>CD Notifications</title>
-              <link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
-              <description>CD status feed</description>
-              <item>
-                <title>$TITLE</title>
-                <description>$DESC</description>
-                <pubDate>$DATE</pubDate>
-                <guid isPermaLink="false">${{ github.run_id }}-cd</guid>
-                <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
-              </item>
-            </channel>
-          </rss>
-          EOF
+          NEW_ITEM=$(cat <<EOF
+    <item>
+      <title>$TITLE</title>
+      <description>$DESC</description>
+      <pubDate>$DATE</pubDate>
+      <guid isPermaLink="false">${{ github.run_id }}-cd</guid>
+      <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
+      <category>CD</category>
+    </item>
+EOF
+          )
 
-      - name: Upload Pages artifact (CD)
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
-
-      - name: Deploy to GitHub Pages (CD)
-        id: deploy
-        uses: actions/deploy-pages@v4
+          awk -v newitem="$NEW_ITEM" '
+            BEGIN{printHeader=1; itemCount=0}
+            /<channel>/ {print; next}
+            printHeader && /<description>/ {
+              print;
+              print "    <link>https://'"${{ github.repository_owner }}"'.github.io/'"'"${{ github.event.repository.name }}"'"'/</link>";
+              printHeader=0;
+              next
+            }
+            {lines[NR]=$0}
+            END{
+              chStart=0
+              for(i=1;i<=NR;i++){
+                print lines[i]
+                if(lines[i] ~ /<channel>/){chStart=1;break}
+              }
+              for(j=i+1;j<=NR;j++){
