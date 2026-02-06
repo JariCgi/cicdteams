@@ -1,4 +1,4 @@
-name: CI/CD (multi-item RSS under /feed/feed.xml, no repo writes)
+name: CI/CD (multi-item RSS under /feed/feed.xml, bash-only)
 
 on:
   push:
@@ -37,3 +37,31 @@ jobs:
           REPO_NAME="${REPO#*/}"
           BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
           mkdir -p dist
+          cat > dist/index.html <<'HTML'
+          <!doctype html>
+          <html lang="fi">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width,initial-scale=1" />
+              <title>CI/CD demo</title>
+              <style>
+                body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:2rem;line-height:1.5}
+                code{background:#f4f4f4;padding:.2rem .4rem;border-radius:.25rem}
+                a{color:#0366d6;text-decoration:none}
+                a:hover{text-decoration:underline}
+              </style>
+            </head>
+            <body>
+              <h1>CI/CD demo</h1>
+              <p><strong>Päivitetty:</strong> __DATE__</p>
+              <p>RSS: ./feed/feed.xml</p>
+            </body>
+          </html>
+          HTML
+          sed -i "s|__DATE__|$(date -u)|" dist/index.html
+
+      - name: Generate multi-item RSS (/feed/feed.xml) by merging existing feed
+        shell: bash
+        run: |
+          set -euo pipefail
+
