@@ -1,0 +1,70 @@
+name: Dummy CI/CD (single workflow)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fake build (index.html)
+        run: |
+          mkdir -p dist
+          cat > dist/index.html <<'HTML'
+          <!doctype html>
+          <html lang="fi">
+            <head><meta charset="utf-8" /><title>Dummy GitHub Pages</title></head>
+            <body>
+              <h1>CI/CD demo</h1>
+              <p>Päivitetty: <!--DATE--></p>
+            </body>
+          </html>
+          HTML
+          sed -i "s|<!--DATE-->|$(date -u)|" dist/index.html
+
+      - name: Generate dummy RSS (feed.xml)
+        run: |
+          cat > dist/feed.xml <<'RSS'
+          <?xml version="1.0" encoding="UTF-8" ?>
+          <rss version="2.0">
+            <channel>
+              <title>GitHub CI/CD Demo Feed</title>
+              <link>https://example.github.io/demo</link>
+              <description>Dummy RSS feed for Teams demo</description>
+              <item>
+                <title>Uusi deploy <!--DATE--></title>
+                <description>CI/CD pipeline julkaisi uuden version</description>
+                <pubDate><!--DATE--></pubDate>
+                <guid><!--GUID--></guid>
+              </item>
+            </channel>
+          </rss>
+          RSS
+          sed -i "s|<!--DATE-->|$(date -u)|g" dist/feed.xml
+          sed -i "s|<!--GUID-->|$(date +%s)|" dist/feed.xml
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
