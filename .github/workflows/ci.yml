@@ -1,4 +1,4 @@
-name: CI
+name: CI (Pages deploy, separate feed)
 
 on:
   push:
@@ -6,34 +6,44 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages-ci"
+  cancel-in-progress: true
+
 jobs:
-  ci:
+  build-and-deploy-ci:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Simuloi buildiä/testejä (vaihda oikeisiin komentoihin) ---
+      # --- Simuloitu build/test (korvaa omilla komennoilla) ---
       - name: Build
         run: |
           echo "Running build..."
-          sleep 2
+          sleep 1
 
       - name: Tests
         run: |
           echo "Running tests..."
-          # Palauta 1 jos haluat testata failure-casea
-          exit 0
+          # exit 1  # testaa failurea poistamalla kommentti
+          sleep 1
 
-      # --- Kirjoita RSS feed.xml onnistumis-/epäonnistumistilalla ---
-      - name: Update RSS feed (CI)
-        if: always()
+      # --- Generoi CI-RSS public/feed/ci.xml ---
+      - name: Generate CI RSS
+        if: always()   # päivitä feed myös epäonnistumisissa
         run: |
-          mkdir -p feed
+          mkdir -p public/feed
           DATE=$(date -u +"%a, %d %b %Y %H:%M:%S GMT")
-
-          # Valitse väri/emoji GitHubin job.statusin perusteella
           STATUS="${{ job.status }}"
           if [ "$STATUS" = "success" ]; then
             TITLE="✅ CI: build & test onnistui"
@@ -46,30 +56,29 @@ jobs:
             DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           fi
 
-          # Huom: RSS on yksinkertainen; Teamsin RSS-connector poimii viimeisimmän <item>:in
-          cat > feed/feed.xml <<EOF
+          cat > public/feed/ci.xml <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <rss version="2.0">
             <channel>
-              <title>CI/CD Notifications</title>
+              <title>CI Notifications</title>
               <link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
-              <description>CI/CD status feed</description>
-
+              <description>CI status feed</description>
               <item>
                 <title>$TITLE</title>
                 <description>$DESC</description>
                 <pubDate>$DATE</pubDate>
                 <guid isPermaLink="false">${{ github.run_id }}-ci</guid>
+                <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
               </item>
             </channel>
           </rss>
           EOF
 
-      - name: Commit & push feed
-        if: always()
-        run: |
-          git config user.name "ci-bot"
-          git config user.email "ci@example.com"
-          git add feed/feed.xml
-          git commit -m "CI: update feed ($(date -u))" || echo "No changes"
-          git push
+      - name: Upload Pages artifact (CI)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages (CI)
+        id: deploy
+        uses: actions/deploy-pages@v4
