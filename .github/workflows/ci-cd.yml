@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read      # ei kirjoiteta repoosi
+  contents: read
   pages: write
   id-token: write
 
@@ -19,18 +19,18 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      OWNER: ${{ github.repository_owner }}         # esim. jaricgi
-      REPO:  ${{ github.repository }}               # esim. JariCgi/cicdteams
+      OWNER: ${{ github.repository_owner }}   # esim. jaricgi
+      REPO:  ${{ github.repository }}         # esim. JariCgi/cicdteams
       SHA:   ${{ github.sha }}
-      COMMIT_MSG: ${{ github.event.head_commit.message || 'Automated deploy' }}
       ACTOR: ${{ github.actor }}
-      KEEP_COUNT: "10"                              # pidä näin monta viimeisintä itemiä feedissä
+      COMMIT_MSG: ${{ github.event.head_commit.message || 'Automated deploy' }}
+      KEEP_COUNT: "10"                        # montako viimeistä itemiä pidetään feedissä
 
     steps:
-      - name: Checkout
+      - name: ✅ Checkout
         uses: actions/checkout@v4
 
-      - name: Build site (index.html)
+      - name: 🧱 Build site (index.html)
         shell: bash
         run: |
           set -euo pipefail
@@ -53,14 +53,15 @@ jobs:
             </head>
             <body>
               <h1>CI/CD demo</h1>
-              <p><strong>Päivitetty:</strong> <!--DATE--></p>
-              <p><a href="./feed/feed.xml">RSS: ./feed/feed.xml</a></p>
+              <p><strong>Päivitetty:</strong> __DATE__</p>
+              <p>RSS: <a href="./feed/feed.xml">./feed/feed.xml</a></p>
             </body>
           </html>
           HTML
-          sed -i "s|<!--DATE-->|$(date -u)|" dist/index.html
+          sed -i "s|__DATE__|$(date -u)|" dist/index.html
+          echo "✅ index.html valmis"
 
-      - name: Generate multi-item RSS (/feed/feed.xml) by merging current feed
+      - name: 📰 Generate multi-item RSS (/feed/feed.xml) by merging current feed
         shell: bash
         run: |
           set -euo pipefail
@@ -68,8 +69,6 @@ jobs:
           BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
           mkdir -p dist/feed
 
-          # Kirjoitetaan feed Pythonilla: haetaan nykyinen feed Pagesista (jos on),
-          # lisätään uusi item alkuun ja trimmataan KEEP_COUNT:iin.
           python3 - <<'PY'
           import os, sys, urllib.request, xml.etree.ElementTree as ET
           from xml.dom import minidom
@@ -89,12 +88,55 @@ jobs:
           pub_date = email.utils.format_datetime(now, usegmt=True)
           guid_val = f"{sha}--{int(now.timestamp())}"
 
-          # Rakenna uusi item
           def el(tag, text=None, attrib=None):
             e = ET.Element(tag, attrib or {})
             if text is not None:
               e.text = text
             return e
 
+          # Uusi item
           new_item = el("item")
           new_item.append(el("title", commit_msg))
+          new_item.append(el("description", f"Deploy by {actor}"))
+          new_item.append(el("pubDate", pub_date))
+          new_item.append(el("guid", guid_val, {"isPermaLink": "false"}))
+          new_item.append(el("link", base))
+
+          # Hae nykyinen feed (voi puuttua ekalla ajolla)
+          existing_items = []
+          url = base + "feed/feed.xml"
+          try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+              if resp.status == 200:
+                data = resp.read()
+                root = ET.fromstring(data)
+                channel = root.find("channel") or root.find("{*}channel")
+                if channel is not None:
+                  for it in channel.findall("item"):
+                    existing_items.append(it)
+          except Exception as e:
+            # Ei haittaa, aloitetaan tyhjästä
+            pass
+
+          # Rakenna uusi feed
+          rss = el("rss", attrib={"version": "2.0"})
+          channel = el("channel"); rss.append(channel)
+          channel.append(el("title", f"{owner}/{repo} – CI/CD Demo Feed"))
+          channel.append(el("link", base))
+          channel.append(el("description", "Automated RSS from GitHub Actions deploys"))
+          channel.append(el("lastBuildDate", pub_date))
+
+          # Lisää uusi item ensin, sitten aiemmat uniq guidin mukaan, trimmaa keep
+          def guid_of(item):
+            g = item.find("guid")
+            return g.text.strip() if g is not None and g.text else None
+
+          seen = set()
+          def add_item(it):
+            g = guid_of(it)
+            if g and g not in seen:
+              channel.append(it)
+              seen.add(g)
+
+          add_item(new_item)
+          for it in existing_items:
