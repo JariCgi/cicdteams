@@ -1,14 +1,12 @@
-name: Dummy CI/CD (multi-item RSS under /feed/feed.xml)
+name: Dummy CI/CD (single workflow, feed under /feed/feed.xml)
 
 on:
   push:
     branches: [ "main" ]
-    paths-ignore:
-      - 'data/feed_items.json'   # estää historiacommitin käynnistämästä uutta ajoa
   workflow_dispatch:
 
 permissions:
-  contents: write      # commitoidaan historiaa repoosi
+  contents: read
   pages: write
   id-token: write
 
@@ -27,75 +25,94 @@ jobs:
       COMMIT_MSG: ${{ github.event.head_commit.message || 'Automated deploy' }}
       ACTOR: ${{ github.actor }}
       COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
-      KEEP_COUNT: "10"                                # montako itemiä pidetään feedissä
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
-      - name: Install jq (for JSON ops)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
-
-      # 1) Päivitä historia (data/feed_items.json)
-      - name: Update feed history (prepend new item, keep last N)
+      - name: Build site (index.html)
         shell: bash
         run: |
           set -euo pipefail
-
           REPO_NAME="${REPO#*/}"
           BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
-          pub_date="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
-          guid="${SHA}-$(date +%s)"
+          mkdir -p dist
+          cat > dist/index.html <<'HTML'
+          <!doctype html>
+          <html lang="fi">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width,initial-scale=1" />
+              <title>CI/CD demo</title>
+              <style>
+                body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:2rem;line-height:1.5}
+                code{background:#f4f4f4;padding:.2rem .4rem;border-radius:.25rem}
+                a{color:#0366d6;text-decoration:none}
+                a:hover{text-decoration:underline}
+              </style>
+            </head>
+            <body>
+              <h1>CI/CD demo</h1>
+              <p><strong>Päivitetty:</strong> <!--DATE--></p>
+              <p><strong>Tekijä:</strong> <!--ACTOR--></p>
+              <p>RSS: <a href="./feed/feed.xml">./feed/feed.xml</a></p>
+            </body>
+          </html>
+          HTML
+          sed -i "s|<!--DATE-->|$(date -u)|" dist/index.html
+          sed -i "s|<!--ACTOR-->|${ACTOR}|" dist/index.html
 
-          # XML-escape commit-viesti (title)
+      - name: Generate RSS (/feed/feed.xml)
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO_NAME="${REPO#*/}"
+          BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
+
+          # XML‑escape commit message
           raw_msg="${COMMIT_MSG:-Automated deploy}"
           msg_escaped=$(printf '%s' "$raw_msg" \
             | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e "s/\"/\&quot;/g" -e "s/'/\&apos;/g")
 
-          mkdir -p data
+          mkdir -p dist/feed
+          pub_date="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
+          guid="${SHA}-$(date +%s)"
 
-          # Jos historiaa ei ole, luodaan tyhjä lista
-          if [ ! -f data/feed_items.json ]; then
-            echo '[]' > data/feed_items.json
-          fi
+          cat > dist/feed/feed.xml <<RSS
+          <?xml version="1.0" encoding="UTF-8"?>
+          <rss version="2.0">
+            <channel>
+              <title>${OWNER}/${REPO_NAME} – CI/CD Demo Feed</title>
+              <link>${BASE_URL}</link>
+              <description>Automated RSS from GitHub Actions deploys</description>
+              <lastBuildDate>${pub_date}</lastBuildDate>
+              <item>
+                <title>${msg_escaped}</title>
+                <description>Deploy by ${ACTOR}</description>
+                <pubDate>${pub_date}</pubDate>
+                <guid isPermaLink="false">${guid}</guid>
+                <link>${BASE_URL}</link>
+              </item>
+            </channel>
+          </rss>
+          RSS
 
-          echo "Existing items (before):"
-          cat data/feed_items.json || true
+      - name: Verify feed exists and list files
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Listing dist/ content:"
+          find dist -maxdepth 3 -type f -print | sort
+          test -f dist/feed/feed.xml || (echo "ERROR: dist/feed/feed.xml puuttuu" && exit 1)
 
-          # Uusi item JSON:na
-          NEW_ITEM=$(jq -n \
-            --arg title "$msg_escaped" \
-            --arg description "Deploy by ${ACTOR}" \
-            --arg pubDate "$pub_date" \
-            --arg guid "$guid" \
-            --arg link "$BASE_URL" \
-            '{title: $title, description: $description, pubDate: $pubDate, guid: $guid, link: $link}')
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
 
-          # Prepend uusi, poista duplikaatit guidin mukaan, trimmaa N
-          UPDATED=$(jq --argjson item "$NEW_ITEM" --argjson keep ${KEEP_COUNT} '
-            [ $item ] + .           # lisää alkuun
-            | unique_by(.guid)      # uniikit guidit
-            | .[:$keep]             # pidä vain N ensimmäistä
-          ' data/feed_items.json)
+      - name: Upload artifact for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
 
-          printf '%s\n' "$UPDATED" > data/feed_items.json
-
-          echo "Updated items (after):"
-          cat data/feed_items.json
-
-          # Commit & push vain jos muuttui
-          if ! git diff --quiet -- data/feed_items.json; then
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add data/feed_items.json
-            git commit -m "chore: update feed history (add ${guid})"
-            # push suoraan nykyiseen branchiin
-            git push origin HEAD
-          else
-            echo "No changes to feed history."
-          fi
-
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
