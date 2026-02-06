@@ -1,100 +1,55 @@
-name: CI → RSS (single feed)
+name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main", "master" ]
   pull_request:
-  workflow_dispatch:
+    branches: [ "main", "master" ]
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages-single-feed"
-  cancel-in-progress: true
 
 jobs:
-  ci_to_rss:
+  build-and-test:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # (Simuloi build/test tarvittaessa)
-      - name: Build & Test (noop)
+      # Poista tämä lohko, jos et käytä Nodea. Jos käytät Pythonia, Dotnetiä tms., korvaa vastaavalla setup- ja build/test -vaiheilla.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        if: hashFiles('package-lock.json') != ''
+        run: npm ci
+
+      - name: Run tests
+        # Mukauta komento projektisi mukaan (esim. npm run test --if-present)
         run: |
-          echo "Build & tests..."
-          # exit 1  # poista kommentti testataksesi failurea
-          sleep 1
-
-      # --- GENEROI/APPEND RSS feediin yhden <item>:n CI-statuksella ---
-      - name: Generate/Append feed.xml (CI)
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p public/feed
-
-          FEED_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/feed/feed.xml"
-          LOCAL_FEED="public/feed/feed.xml"
-
-          # Lataa olemassa oleva feed, jos löytyy (ei virhettä jos 404)
-          if curl -fsS "$FEED_URL" -o "$LOCAL_FEED.old" ; then
-            echo "Existing feed downloaded."
+          if npm run | grep -q "test"; then
+            npm run test
           else
-            echo "No existing feed found; creating new."
-            cat > "$LOCAL_FEED.old" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
-  <channel>
-    <title>CI/CD Notifications</title>
-    <link></link>
-    <description>CI/CD status feed (single)</description>
-  </channel>
-</rss>
-EOF
+            echo "No test script found, skipping."
           fi
 
-          DATE="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
-          STATUS="${{ job.status }}"
-          if [ "$STATUS" = "success" ]; then
-            TITLE="✅ CI: build & test onnistui"
-            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          elif [ "$STATUS" = "cancelled" ]; then
-            TITLE="⏸️ CI: peruttu"
-            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      - name: Build site
+        # Mukauta build-komento ja output-hakemisto (oletus: dist/)
+        run: |
+          if npm run | grep -q "build"; then
+            npm run build
           else
-            TITLE="❌ CI: build/test epäonnistui"
-            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "No build script found, creating dist/ with index.html placeholder."
+            mkdir -p dist
+            echo "<!doctype html><title>Placeholder</title><h1>Hello Pages</h1>" > dist/index.html
           fi
 
-          # Uusi item (lisätään listan alkuun)
-          NEW_ITEM=$(cat <<EOF
-    <item>
-      <title>$TITLE</title>
-      <description>$DESC</description>
-      <pubDate>$DATE</pubDate>
-      <guid isPermaLink="false">${{ github.run_id }}-ci</guid>
-      <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
-      <category>CI</category>
-    </item>
-EOF
-          )
-
-          # Rakenna uusi feed:
-          # - kopioi header (rss/channel alku)
-          # - upota NEW_ITEM
-          # - kopioi olemassa olevat itemit (max 19 kpl)
-          # - sulje channel/rss
-          awk -v newitem="$NEW_ITEM" '
-            BEGIN{printHeader=1; itemCount=0}
-            /<channel>/ {print; next}
-            printHeader && /<description>/ {
-              print;
-              # Aseta <link> kanavatasolle
+      # TÄRKEÄÄ: tämä artifact käytetään CD-jobissa deployhin (GitHub Pages)
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
