@@ -1,54 +1,55 @@
-name: CI
+name: Dummy CI
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build-and-test:
+  ci:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Poista tämä lohko, jos et käytä Nodea. Jos käytät Pythonia, Dotnetiä tms., korvaa vastaavalla setup- ja build/test -vaiheilla.
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-
-      - name: Install dependencies
-        if: hashFiles('package-lock.json') != ''
-        run: npm ci
-
-      - name: Run tests
-        # Mukauta komento projektisi mukaan (esim. npm run test --if-present)
+      - name: Fake build
         run: |
-          if npm run | grep -q "test"; then
-            npm run test
-          else
-            echo "No test script found, skipping."
-          fi
+          mkdir -p dist
 
-      - name: Build site
-        # Mukauta build-komento ja output-hakemisto (oletus: dist/)
+          echo "<!doctype html>
+          <html>
+            <head>
+              <meta charset='utf-8' />
+              <title>Dummy GitHub Pages</title>
+            </head>
+            <body>
+              <h1>CI/CD demo</h1>
+              <p>Päivitetty: $(date -u)</p>
+            </body>
+          </html>" > dist/index.html
+
+      - name: Generate dummy RSS feed
         run: |
-          if npm run | grep -q "build"; then
-            npm run build
-          else
-            echo "No build script found, creating dist/ with index.html placeholder."
-            mkdir -p dist
-            echo "<!doctype html><title>Placeholder</title><h1>Hello Pages</h1>" > dist/index.html
-          fi
+          echo "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>
+          <rss version=\"2.0\">
+            <channel>
+              <title>GitHub CI/CD Demo Feed</title>
+              <link>https://example.github.io/demo</link>
+              <description>Dummy RSS feed for Teams demo</description>
+              <item>
+                <title>Uusi deploy $(date -u)</title>
+                <description>CI/CD pipeline julkaisi uuden version</description>
+                <pubDate>$(date -u)</pubDate>
+                <guid>$(date +%s)</guid>
+              </item>
+            </channel>
+          </rss>" > dist/feed.xml
 
-      # TÄRKEÄÄ: tämä artifact käytetään CD-jobissa deployhin (GitHub Pages)
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
