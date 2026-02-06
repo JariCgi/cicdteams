@@ -1,9 +1,10 @@
-name: CD → RSS (single feed)
+name: Dummy CD (Deploy Pages)
 
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Dummy CI"]
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -11,92 +12,25 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages-single-feed"
-  cancel-in-progress: true
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  cd_to_rss:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
 
-      # (Simuloitu deploy)
-      - name: Deploy (noop)
-        run: |
-          echo "Deploying..."
-          # exit 1  # poista kommentti testataksesi failurea
-          sleep 1
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages
 
-      - name: Generate/Append feed.xml (CD)
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p public/feed
-
-          FEED_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/feed/feed.xml"
-          LOCAL_FEED="public/feed/feed.xml"
-
-          if curl -fsS "$FEED_URL" -o "$LOCAL_FEED.old" ; then
-            echo "Existing feed downloaded."
-          else
-            echo "No existing feed found; creating new."
-            cat > "$LOCAL_FEED.old" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
-  <channel>
-    <title>CI/CD Notifications</title>
-    <link></link>
-    <description>CI/CD status feed (single)</description>
-  </channel>
-</rss>
-EOF
-          fi
-
-          DATE="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
-          STATUS="${{ job.status }}"
-          if [ "$STATUS" = "success" ]; then
-            TITLE="🚀 CD: deploy onnistui"
-            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          elif [ "$STATUS" = "cancelled" ]; then
-            TITLE="⏸️ CD: deploy peruttu"
-            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          else
-            TITLE="🔥 CD: deploy epäonnistui"
-            DESC="Repo: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          fi
-
-          NEW_ITEM=$(cat <<EOF
-    <item>
-      <title>$TITLE</title>
-      <description>$DESC</description>
-      <pubDate>$DATE</pubDate>
-      <guid isPermaLink="false">${{ github.run_id }}-cd</guid>
-      <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
-      <category>CD</category>
-    </item>
-EOF
-          )
-
-          awk -v newitem="$NEW_ITEM" '
-            BEGIN{printHeader=1; itemCount=0}
-            /<channel>/ {print; next}
-            printHeader && /<description>/ {
-              print;
-              print "    <link>https://'"${{ github.repository_owner }}"'.github.io/'"'"${{ github.event.repository.name }}"'"'/</link>";
-              printHeader=0;
-              next
-            }
-            {lines[NR]=$0}
-            END{
-              chStart=0
-              for(i=1;i<=NR;i++){
-                print lines[i]
-                if(lines[i] ~ /<channel>/){chStart=1;break}
-              }
-              for(j=i+1;j<=NR;j++){
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
