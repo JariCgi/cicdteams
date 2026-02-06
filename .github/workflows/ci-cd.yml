@@ -1,4 +1,4 @@
-name: Dummy CI/CD (single workflow, feed under /feed/feed.xml)
+name: Dummy CI/CD (multi-item RSS under /feed/feed.xml)
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write      # <-- tarvitaan, jotta voimme commitoida history-tiedoston
   pages: write
   id-token: write
 
@@ -25,11 +25,71 @@ jobs:
       COMMIT_MSG: ${{ github.event.head_commit.message || 'Automated deploy' }}
       ACTOR: ${{ github.actor }}
       COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+      KEEP_COUNT: "10"                                # montako itemiä pidetään feedissä
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 1) Päivitä historia (data/feed_items.json)
+      - name: Update feed history (prepend new item, keep last N)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REPO_NAME="${REPO#*/}"
+          BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
+          pub_date="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
+          guid="${SHA}-$(date +%s)"
+
+          # XML-escape commit-viestiä varten (title)
+          raw_msg="${COMMIT_MSG:-Automated deploy}"
+          msg_escaped=$(printf '%s' "$raw_msg" \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e "s/\"/\&quot;/g" -e "s/'/\&apos;/g")
+
+          mkdir -p data
+
+          # Jos historiaa ei ole, luodaan tyhjä lista
+          if [ ! -f data/feed_items.json ]; then
+            echo '[]' > data/feed_items.json
+          fi
+
+          echo "Existing items (before):"
+          cat data/feed_items.json
+
+          # Rakennetaan uusi item JSON-objektina
+          NEW_ITEM=$(jq -n \
+            --arg title "$msg_escaped" \
+            --arg description "Deploy by ${ACTOR}" \
+            --arg pubDate "$pub_date" \
+            --arg guid "$guid" \
+            --arg link "$BASE_URL" \
+            '{title: $title, description: $description, pubDate: $pubDate, guid: $guid, link: $link}')
+
+          # Prependataan uusi item, poistetaan duplikaatit guidin perusteella ja trimmi viimeiset KEEP_COUNT
+          UPDATED=$(jq --argjson item "$NEW_ITEM" --argjson keep ${KEEP_COUNT} '
+            [ $item ] + .                                  # lisää alkuun
+            | unique_by(.guid)                             # varmistetaan uniikkius guidin perusteella
+            | .[:$keep]                                    # pidä vain N ensimmäistä
+          ' data/feed_items.json)
+
+          printf '%s\n' "$UPDATED" > data/feed_items.json
+
+          echo "Updated items (after):"
+          cat data/feed_items.json
+
+          # Konfiguroi git ja commitoi muutos vain jos muuttui
+          if ! git diff --quiet -- data/feed_items.json; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/feed_items.json
+            git commit -m "chore: update feed history (add ${guid})"
+            git push
+          else
+            echo "No changes to feed history."
+          fi
+
+      # 2) Rakenna sivu (index.html)
       - name: Build site (index.html)
         run: |
           set -euo pipefail
@@ -61,40 +121,51 @@ jobs:
           </html>
           HTML
 
-      - name: Generate RSS (/feed/feed.xml)
+      # 3) Generoi feed.xml KAIKISTA historiasta
+      - name: Generate RSS (/feed/feed.xml) from history
         run: |
           set -euo pipefail
           REPO_NAME="${REPO#*/}"
           BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
 
-          # XML-escape commit message
-          raw_msg="${COMMIT_MSG:-Automated deploy}"
-          msg_escaped=$(printf '%s' "$raw_msg" \
-            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e "s/\"/\&quot;/g" -e "s/'/\&apos;/g")
-
           mkdir -p dist/feed
-          pub_date="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
-          guid="${SHA}-$(date +%s)"
 
-          cat > dist/feed/feed.xml <<RSS
-          <?xml version="1.0" encoding="UTF-8"?>
-          <rss version="2.0">
-            <channel>
-              <title>${OWNER}/${REPO_NAME} – CI/CD Demo Feed</title>
-              <link>${BASE_URL}</link>
-              <description>Automated RSS from GitHub Actions deploys</description>
-              <lastBuildDate>${pub_date}</lastBuildDate>
+          # lastBuildDate = tuorein itemin pubDate, tai nyt
+          if jq -e 'length > 0' data/feed_items.json >/dev/null 2>&1; then
+            lastBuildDate=$(jq -r '.[0].pubDate' data/feed_items.json)
+          else
+            lastBuildDate="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
+          fi
 
-              <item>
-                <title>${msg_escaped}</title>
-                <description>Deploy by ${ACTOR}</description>
-                <pubDate>${pub_date}</pubDate>
-                <guid isPermaLink="false">${guid}</guid>
-                <link>${BASE_URL}</link>
-              </item>
-            </channel>
-          </rss>
-          RSS
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<rss version="2.0">'
+            echo '  <channel>'
+            echo "    <title>${OWNER}/${REPO_NAME} – CI/CD Demo Feed</title>"
+            echo "    <link>${BASE_URL}</link>"
+            echo '    <description>Automated RSS from GitHub Actions deploys</description>'
+            echo "    <lastBuildDate>${lastBuildDate}</lastBuildDate>"
+            # Tulosta kaikki itemit järjestyksessä
+            jq -r '.[] | @base64' data/feed_items.json | while read -r line; do
+              obj=$(echo "$line" | base64 --decode)
+              title=$(echo "$obj" | jq -r '.title')
+              desc=$(echo "$obj" | jq -r '.description')
+              pd=$(echo "$obj" | jq -r '.pubDate')
+              guid=$(echo "$obj" | jq -r '.guid')
+              link=$(echo "$obj" | jq -r '.link')
+              cat <<ITEM
+                <item>
+                  <title>${title}</title>
+                  <description>${desc}</description>
+                  <pubDate>${pd}</pubDate>
+                  <guid isPermaLink="false">${guid}</guid>
+                  <link>${link}</link>
+                </item>
+ITEM
+            done
+            echo '  </channel>'
+            echo '</rss>'
+          } > dist/feed/feed.xml
 
       - name: Verify feed exists and list files
         run: |
@@ -115,3 +186,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+``
