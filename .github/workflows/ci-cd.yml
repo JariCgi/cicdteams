@@ -54,7 +54,7 @@ jobs:
             <body>
               <h1>CI/CD demo</h1>
               <p><strong>Päivitetty:</strong> __DATE__</p>
-              <p>RSS: ./feed/feed.xml</p>
+              <p>RSS: <a href="./feed/feed.xml">./feed/feed.xml</a></p>
             </body>
           </html>
           HTML
@@ -65,3 +65,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          REPO_NAME="${REPO#*/}"
+          BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
+          mkdir -p dist/feed
+
+          NOW_RFC="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
+          GUID="${SHA}-$(date +%s)"
+
+          # XML-escape otsikko
+          ESC_TITLE="$(printf '%s' "${COMMIT_MSG:-Automated deploy}" \
