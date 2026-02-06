@@ -2,8 +2,7 @@ name: Dummy CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -12,45 +11,19 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Fake build
+      - name: Fake build (index.html)
         run: |
           mkdir -p dist
-
-          echo "<!doctype html>
-          <html>
-            <head>
-              <meta charset='utf-8' />
-              <title>Dummy GitHub Pages</title>
-            </head>
+          cat > dist/index.html <<'HTML'
+          <!doctype html>
+          <html lang="fi">
+            <head><meta charset="utf-8" /><title>Dummy GitHub Pages</title></head>
             <body>
               <h1>CI/CD demo</h1>
-              <p>Päivitetty: $(date -u)</p>
+              <p>Päivitetty: <!--DATE--></p>
             </body>
-          </html>" > dist/index.html
-
-      - name: Generate dummy RSS feed
-        run: |
-          echo "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>
-          <rss version=\"2.0\">
-            <channel>
-              <title>GitHub CI/CD Demo Feed</title>
-              <link>https://example.github.io/demo</link>
-              <description>Dummy RSS feed for Teams demo</description>
-              <item>
-                <title>Uusi deploy $(date -u)</title>
-                <description>CI/CD pipeline julkaisi uuden version</description>
-                <pubDate>$(date -u)</pubDate>
-                <guid>$(date +%s)</guid>
-              </item>
-            </channel>
-          </rss>" > dist/feed.xml
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
+          </html>
+          HTML
