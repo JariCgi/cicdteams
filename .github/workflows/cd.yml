@@ -1,0 +1,70 @@
+name: CD
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    # jos haluat: julkaise vain tageista
+    # tags:
+    #   - 'v*'
+
+jobs:
+  cd:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- Simuloi deploy (korvaa oikeilla komennoilla tai jätä no-opiksi) ---
+      - name: Deploy (noop)
+        run: |
+          echo "Deploying..."
+          sleep 2
+          # exit 1  # testaa failurea
+
+      # --- Kirjoita RSS feed.xml deploy-statuksella ---
+      - name: Update RSS feed (CD)
+        if: always()
+        run: |
+          mkdir -p feed
+          DATE=$(date -u +"%a, %d %b %Y %H:%M:%S GMT")
+
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" = "success" ]; then
+            TITLE="🚀 CD: deploy onnistui"
+            DESC="Repository: ${{ github.repository }}%0ABranch/Ref: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          elif [ "$STATUS" = "cancelled" ]; then
+            TITLE="⏸️ CD: deploy peruttu"
+            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            TITLE="🔥 CD: deploy epäonnistui"
+            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+
+          cat > feed/feed.xml <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <rss version="2.0">
+            <channel>
+              <title>CI/CD Notifications</title>
+              <link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
+              <description>CI/CD status feed</description>
+
+              <item>
+                <title>$TITLE</title>
+                <description>$DESC</description>
+                <pubDate>$DATE</pubDate>
+                <guid isPermaLink="false">${{ github.run_id }}-cd</guid>
+              </item>
+            </channel>
+          </rss>
+          EOF
+
+      - name: Commit & push feed
+        if: always()
+        run: |
+          git config user.name "cd-bot"
+          git config user.email "cd@example.com"
+          git add feed/feed.xml
+          git commit -m "CD: update feed ($(date -u))" || echo "No changes"
+          git push
