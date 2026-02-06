@@ -1,39 +1,47 @@
-name: CD
+name: CD (Pages deploy, no git push)
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    # jos haluat: julkaise vain tageista
-    # tags:
-    #   - 'v*'
+
+# Ei tarvita contents: write
+permissions:
+  contents: read
+  pages: write       # Pages deploy
+  id-token: write    # OIDC Pagesille
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
-  cd:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- Simuloi deploy (korvaa oikeilla komennoilla tai jätä no-opiksi) ---
+      # (valinnainen) deploy-simulaatio
       - name: Deploy (noop)
         run: |
           echo "Deploying..."
-          sleep 2
-          # exit 1  # testaa failurea
+          sleep 1
 
-      # --- Kirjoita RSS feed.xml deploy-statuksella ---
-      - name: Update RSS feed (CD)
+      # Generoi RSS-XML public-kansioon
+      - name: Generate RSS (CD)
         if: always()
         run: |
-          mkdir -p feed
+          mkdir -p public/feed
           DATE=$(date -u +"%a, %d %b %Y %H:%M:%S GMT")
-
           STATUS="${{ job.status }}"
           if [ "$STATUS" = "success" ]; then
             TITLE="🚀 CD: deploy onnistui"
-            DESC="Repository: ${{ github.repository }}%0ABranch/Ref: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           elif [ "$STATUS" = "cancelled" ]; then
             TITLE="⏸️ CD: deploy peruttu"
             DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -42,14 +50,13 @@ jobs:
             DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           fi
 
-          cat > feed/feed.xml <<EOF
+          cat > public/feed/feed.xml <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <rss version="2.0">
             <channel>
               <title>CI/CD Notifications</title>
               <link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
               <description>CI/CD status feed</description>
-
               <item>
                 <title>$TITLE</title>
                 <description>$DESC</description>
@@ -60,11 +67,13 @@ jobs:
           </rss>
           EOF
 
-      - name: Commit & push feed
-        if: always()
-        run: |
-          git config user.name "cd-bot"
-          git config user.email "cd@example.com"
-          git add feed/feed.xml
-          git commit -m "CD: update feed ($(date -u))" || echo "No changes"
-          git push
+      # Lataa sivusto artefaktiksi
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      # Julkaise GitHub Pagesiin
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
