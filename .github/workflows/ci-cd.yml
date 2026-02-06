@@ -1,12 +1,14 @@
-name: Dummy CI/CD (single workflow, feed under /feed/feed.xml)
+name: CI/CD with multi-item RSS (feed under /feed/feed.xml)
 
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - 'data/feed_items.json'   # estää historiacommitin laukaisemasta uutta runia
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write    # tarvitaan data/feed_items.json commitointiin
   pages: write
   id-token: write
 
@@ -19,91 +21,137 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      REPO: ${{ github.repository }}                  # owner/repo
       OWNER: ${{ github.repository_owner }}
-      SHA: ${{ github.sha }}
+      REPO:  ${{ github.repository }}
+      SHA:   ${{ github.sha }}
       COMMIT_MSG: ${{ github.event.head_commit.message || 'Automated deploy' }}
       ACTOR: ${{ github.actor }}
-      COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+      KEEP_COUNT: "10"  # montako itemiä pidetään feedissä
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
-      - name: Build site (index.html)
+      - name: Ensure jq (JSON-työkalu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      # 1) Päivitä/ylläpidä historiaa repo-tiedostossa data/feed_items.json
+      - name: Update feed history (prepend new item, keep last N)
         shell: bash
         run: |
           set -euo pipefail
           REPO_NAME="${REPO#*/}"
           BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
-          mkdir -p dist
+
+          mkdir -p data
+          [ -f data/feed_items.json ] || echo '[]' > data/feed_items.json
+
+          pub_date="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
+          guid="${SHA}-$(date +%s)"
+
+          # XML-escape commit-viesti otsikoksi
+          esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e "s/\"/\&quot;/g" -e "s/'/\&apos;/g"; }
+          title="$(esc "${COMMIT_MSG:-Automated deploy}")"
+
+          NEW_ITEM=$(jq -n \
+            --arg title "$title" \
+            --arg description "Deploy by ${ACTOR}" \
+            --arg pubDate "$pub_date" \
+            --arg guid "$guid" \
+            --arg link "$BASE_URL" \
+            '{title:$title, description:$description, pubDate:$pubDate, guid:$guid, link:$link}')
+
+          tmp=$(mktemp)
+          jq --argjson item "$NEW_ITEM" --argjson keep "${KEEP_COUNT}" '
+            [ $item ] + .            # lisää alkuun
+            | unique_by(.guid)       # uniikit guidit
+            | .[:$keep]              # pidä vain N ensimmäistä
+          ' data/feed_items.json > "$tmp"
+
+          if ! cmp -s "$tmp" data/feed_items.json; then
+            mv "$tmp" data/feed_items.json
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/feed_items.json
+            git commit -m "chore: update feed history (${guid})"
+            git push origin HEAD
+          else
+            rm -f "$tmp"
+            echo "No changes to feed history."
+          fi
+
+      # 2) Rakenna sivu ja feed (useampi item)
+      - name: Build site (index.html) and generate feed (/feed/feed.xml)
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO_NAME="${REPO#*/}"
+          BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
+          mkdir -p dist/feed
+
+          # index.html
           cat > dist/index.html <<'HTML'
           <!doctype html>
           <html lang="fi">
             <head>
-              <meta charset="utf-8" />
-              <meta name="viewport" content="width=device-width,initial-scale=1" />
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width,initial-scale=1">
               <title>CI/CD demo</title>
-              <style>
-                body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:2rem;line-height:1.5}
-                code{background:#f4f4f4;padding:.2rem .4rem;border-radius:.25rem}
-                a{color:#0366d6;text-decoration:none}
-                a:hover{text-decoration:underline}
-              </style>
+              <style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:2rem;line-height:1.5}</style>
             </head>
             <body>
               <h1>CI/CD demo</h1>
-              <p><strong>Päivitetty:</strong> <!--DATE--></p>
-              <p><strong>Tekijä:</strong> <!--ACTOR--></p>
-              <p>RSS: <a href="./feed/feed.xml">./feed/feed.xml</a></p>
+              <p><strong>Päivitetty:</strong> __DATE__</p>
+              <p>RSS: <a href="./feed/feed.xml">feed/feed.xml</a></p>
             </body>
           </html>
           HTML
-          sed -i "s|<!--DATE-->|$(date -u)|" dist/index.html
-          sed -i "s|<!--ACTOR-->|${ACTOR}|" dist/index.html
+          sed -i "s/__DATE__/$(date -u)/" dist/index.html
 
-      - name: Generate RSS (/feed/feed.xml)
-        shell: bash
+          # feed.xml useasta historiarivistä
+          lastBuildDate=$(jq -r '.[0].pubDate // empty' data/feed_items.json)
+          if [ -z "$lastBuildDate" ]; then
+            lastBuildDate="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
+          fi
+
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<rss version="2.0">'
+            echo '  <channel>'
+            echo "    <title>${OWNER}/${REPO_NAME} – CI/CD Demo Feed</title>"
+            echo "    <link>${BASE_URL}</link>"
+            echo '    <description>Automated RSS from GitHub Actions deploys</description>'
+            echo "    <lastBuildDate>${lastBuildDate}</lastBuildDate>"
+            jq -r '.[] | @base64' data/feed_items.json | while read -r line; do
+              obj=$(echo "$line" | base64 --decode)
+              title=$(echo "$obj" | jq -r '.title')
+              desc=$(echo "$obj" | jq -r '.description')
+              pd=$(echo "$obj" | jq -r '.pubDate')
+              guid=$(echo "$obj" | jq -r '.guid')
+              link=$(echo "$obj" | jq -r '.link')
+              cat <<ITEM
+                <item>
+                  <title>${title}</title>
+                  <description>${desc}</description>
+                  <pubDate>${pd}</pubDate>
+                  <guid isPermaLink="false">${guid}</guid>
+                  <link>${link}</link>
+                </item>
+ITEM
+            done
+            echo '  </channel>'
+            echo '</rss>'
+          } > dist/feed/feed.xml
+
+      - name: Verify files before deploy
         run: |
-          set -euo pipefail
-          REPO_NAME="${REPO#*/}"
-          BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
-
-          # XML‑escape commit message
-          raw_msg="${COMMIT_MSG:-Automated deploy}"
-          msg_escaped=$(printf '%s' "$raw_msg" \
-            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e "s/\"/\&quot;/g" -e "s/'/\&apos;/g")
-
-          mkdir -p dist/feed
-          pub_date="$(date -u +"%a, %d %b %Y %H:%M:%S GMT")"
-          guid="${SHA}-$(date +%s)"
-
-          cat > dist/feed/feed.xml <<RSS
-          <?xml version="1.0" encoding="UTF-8"?>
-          <rss version="2.0">
-            <channel>
-              <title>${OWNER}/${REPO_NAME} – CI/CD Demo Feed</title>
-              <link>${BASE_URL}</link>
-              <description>Automated RSS from GitHub Actions deploys</description>
-              <lastBuildDate>${pub_date}</lastBuildDate>
-              <item>
-                <title>${msg_escaped}</title>
-                <description>Deploy by ${ACTOR}</description>
-                <pubDate>${pub_date}</pubDate>
-                <guid isPermaLink="false">${guid}</guid>
-                <link>${BASE_URL}</link>
-              </item>
-            </channel>
-          </rss>
-          RSS
-
-      - name: Verify feed exists and list files
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Listing dist/ content:"
-          find dist -maxdepth 3 -type f -print | sort
-          test -f dist/feed/feed.xml || (echo "ERROR: dist/feed/feed.xml puuttuu" && exit 1)
+          set -e
+          echo "Files to publish:" && find dist -maxdepth 3 -type f -print | sort
+          test -f dist/feed/feed.xml
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
