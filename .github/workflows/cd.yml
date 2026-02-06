@@ -1,39 +1,39 @@
-name: CD (Pages deploy, no git push)
+name: CD (Pages deploy, separate feed)
 
 on:
-  workflow_dispatch:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
-# Ei tarvita contents: write
 permissions:
   contents: read
-  pages: write       # Pages deploy
-  id-token: write    # OIDC Pagesille
+  pages: write
+  id-token: write
 
 concurrency:
-  group: "pages"
+  group: "pages-cd"
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  build-and-deploy-cd:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # (valinnainen) deploy-simulaatio
+      # --- Simuloitu deploy (korvaa omilla komennoilla) ---
       - name: Deploy (noop)
         run: |
           echo "Deploying..."
+          # exit 1  # testaa failurea poistamalla kommentti
           sleep 1
 
-      # Generoi RSS-XML public-kansioon
-      - name: Generate RSS (CD)
+      # --- Generoi CD-RSS public/feed/cd.xml ---
+      - name: Generate CD RSS
         if: always()
         run: |
           mkdir -p public/feed
@@ -50,30 +50,29 @@ jobs:
             DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           fi
 
-          cat > public/feed/feed.xml <<EOF
+          cat > public/feed/cd.xml <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <rss version="2.0">
             <channel>
-              <title>CI/CD Notifications</title>
+              <title>CD Notifications</title>
               <link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
-              <description>CI/CD status feed</description>
+              <description>CD status feed</description>
               <item>
                 <title>$TITLE</title>
                 <description>$DESC</description>
                 <pubDate>$DATE</pubDate>
                 <guid isPermaLink="false">${{ github.run_id }}-cd</guid>
+                <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
               </item>
             </channel>
           </rss>
           EOF
 
-      # Lataa sivusto artefaktiksi
-      - name: Upload Pages artifact
+      - name: Upload Pages artifact (CD)
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
 
-      # Julkaise GitHub Pagesiin
-      - name: Deploy to GitHub Pages
-        id: deployment
+      - name: Deploy to GitHub Pages (CD)
+        id: deploy
         uses: actions/deploy-pages@v4
