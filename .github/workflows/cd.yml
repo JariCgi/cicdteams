@@ -2,9 +2,8 @@ name: Dummy CD (Deploy Pages)
 
 on:
   workflow_run:
-    workflows: ["Dummy CI"]
-    types:
-      - completed
+    workflows: ["Dummy CI"]   # Varmista että TÄSMÄÄ ci.yml:n name: -kenttään
+    types: [completed]
 
 permissions:
   contents: read
@@ -17,20 +16,38 @@ concurrency:
 
 jobs:
   deploy:
+    # Skippaa vain jos CI ei onnistunut
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     environment:
       name: github-pages
+      # url saadaan deployment-stepin outputista jos haluat:
+      # url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
+      - name: Debug workflow_run context
+        run: |
+          echo "conclusion=${{ github.event.workflow_run.conclusion }}"
+          echo "run_id=${{ github.event.workflow_run.id }}"
+          echo "head_branch=${{ github.event.workflow_run.head_branch }}"
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Download artifact
+      # HAE ARTIFACT TOISESTA WORKFLOW-RUNISTA
+      - name: Download artifact from CI run
         uses: actions/download-artifact@v4
         with:
-          name: github-pages
+          name: github-pages         # upload-pages-artifact@v3 loi tämän nimen
+          run-id: ${{ github.event.workflow_run.id }}
+
+      # Lataa nyt ladattu sisältö uudelleen Pages-deploylle
+      - name: Upload to Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
 
       - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
