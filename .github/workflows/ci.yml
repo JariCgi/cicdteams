@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- Simuloi buildiä/testejä (vaihda oikeisiin komentoihin) ---
+      - name: Build
+        run: |
+          echo "Running build..."
+          sleep 2
+
+      - name: Tests
+        run: |
+          echo "Running tests..."
+          # Palauta 1 jos haluat testata failure-casea
+          exit 0
+
+      # --- Kirjoita RSS feed.xml onnistumis-/epäonnistumistilalla ---
+      - name: Update RSS feed (CI)
+        if: always()
+        run: |
+          mkdir -p feed
+          DATE=$(date -u +"%a, %d %b %Y %H:%M:%S GMT")
+
+          # Valitse väri/emoji GitHubin job.statusin perusteella
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" = "success" ]; then
+            TITLE="✅ CI: build & test onnistui"
+            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          elif [ "$STATUS" = "cancelled" ]; then
+            TITLE="⏸️ CI: peruttu"
+            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            TITLE="❌ CI: build/test epäonnistui"
+            DESC="Repository: ${{ github.repository }}%0ARef: ${{ github.ref }}%0ACommit: ${{ github.sha }}%0ARun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+
+          # Huom: RSS on yksinkertainen; Teamsin RSS-connector poimii viimeisimmän <item>:in
+          cat > feed/feed.xml <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <rss version="2.0">
+            <channel>
+              <title>CI/CD Notifications</title>
+              <link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
+              <description>CI/CD status feed</description>
+
+              <item>
+                <title>$TITLE</title>
+                <description>$DESC</description>
+                <pubDate>$DATE</pubDate>
+                <guid isPermaLink="false">${{ github.run_id }}-ci</guid>
+              </item>
+            </channel>
+          </rss>
+          EOF
+
+      - name: Commit & push feed
+        if: always()
+        run: |
+          git config user.name "ci-bot"
+          git config user.email "ci@example.com"
+          git add feed/feed.xml
+          git commit -m "CI: update feed ($(date -u))" || echo "No changes"
+          git push
