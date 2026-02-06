@@ -1,4 +1,4 @@
-name: Dummy CI/CD (single workflow)
+name: Dummy CI/CD (single workflow, feed under /feed/feed.xml)
 
 on:
   push:
@@ -17,54 +17,50 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+
+    # Näitä käytetään sekä index.html:ssä että feedissä
+    env:
+      REPO: ${{ github.repository }}                  # owner/repo
+      OWNER: ${{ github.repository_owner }}
+      SHA: ${{ github.sha }}
+      COMMIT_MSG: ${{ github.event.head_commit.message || 'Automated deploy' }}
+      ACTOR: ${{ github.actor }}
+      COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Fake build (index.html)
         run: |
+          set -euo pipefail
+          REPO_NAME="${REPO#*/}"
+          BASE_URL="https://${OWNER}.github.io/${REPO_NAME}/"
           mkdir -p dist
-          cat > dist/index.html <<'HTML'
+          cat > dist/index.html <<HTML
           <!doctype html>
           <html lang="fi">
-            <head><meta charset="utf-8" /><title>Dummy GitHub Pages</title></head>
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width,initial-scale=1" />
+              <title>CI/CD demo – ${REPO_NAME}</title>
+              <style>
+                body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:2rem;line-height:1.5}
+                code{background:#f4f4f4;padding:.2rem .4rem;border-radius:.25rem}
+                a{color:#0366d6;text-decoration:none}
+                a:hover{text-decoration:underline}
+              </style>
+            </head>
             <body>
               <h1>CI/CD demo</h1>
-              <p>Päivitetty: <!--DATE--></p>
+              <p><strong>Päivitetty:</strong> $(date -u)</p>
+              <p><strong>Commit:</strong> <a href="${COMMIT_URL}"><code>${SHA}</code></a></p>
+              <p><strong>Tekijä:</strong> ${ACTOR}</p>
+              <p>Sivun perus‑URL: <a href="${BASE_URL}">${BASE_URL}</a></p>
+              <p>RSS: <a href="${BASE_URL}feed/feed.xml">${BASE_URL}feed/feed.xml</a></p>
             </body>
           </html>
           HTML
-          sed -i "s|<!--DATE-->|$(date -u)|" dist/index.html
 
-      - name: Generate dummy RSS (feed.xml)
+      - name: Generate RSS feed (/feed/feed.xml)
         run: |
-          cat > dist/feed/feed.xml <<'RSS'
-          <?xml version="1.0" encoding="UTF-8" ?>
-          <rss version="2.0">
-            <channel>
-              <title>GitHub CI/CD Demo Feed</title>
-              <link>https://example.github.io/demo</link>
-              <description>Dummy RSS feed for Teams demo</description>
-              <item>
-                <title>Uusi deploy <!--DATE--></title>
-                <description>CI/CD pipeline julkaisi uuden version</description>
-                <pubDate><!--DATE--></pubDate>
-                <guid><!--GUID--></guid>
-              </item>
-            </channel>
-          </rss>
-          RSS
-          sed -i "s|<!--DATE-->|$(date -u)|g" dist/feed.xml
-          sed -i "s|<!--GUID-->|$(date +%s)|" dist/feed.xml
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact for Pages
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
