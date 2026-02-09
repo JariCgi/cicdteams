@@ -39,9 +39,9 @@ jobs:
 
       - name: Generate/Update RSS
         run: |
-          mkdir -p public
+          mkdir -p public/feed
           PUB_DATE=$(date -R)
-          FEED_FILE="feed/feed.xml"
+          FEED_FILE="public/feed/feed.xml"
           LIMIT=20
           
           # Määritetään status ( ✅ tai ❌ )
