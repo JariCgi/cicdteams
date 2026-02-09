@@ -63,26 +63,19 @@ jobs:
               "$FEED_FILE"
           else
             echo "Luodaan uusi tiedosto..."
-            # TÄRKEÄÄ: XML-sisältö on sisennetty run-blokin sisään,
-            # mutta cat-komento kirjoittaa sen tiedostoon ilman sisennyksiä.
-            cat <<EOF > "$FEED_FILE"
-<?xml version="1.0" encoding="UTF-8" ?>
-<rss version="2.0">
-<channel>
-<title>Deployment Feed: ${{ github.event.repository.name }}</title>
-<link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
-<description>CI/CD Status Feed</description>
-<lastBuildDate>$PUB_DATE</lastBuildDate>
-<item>
-<title>$TITLE</title>
-<link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
-<description>$DESC</description>
-<pubDate>$PUB_DATE</pubDate>
-<guid>${{ github.sha }}-$GITHUB_RUN_ID</guid>
-</item>
-</channel>
-</rss>
-EOF
+            # Käytetään printf-komentoa, jotta vältetään sisennysepäselvyydet YAMLissa
+            printf '<?xml version="1.0" encoding="UTF-8" ?>\n' > "$FEED_FILE"
+            printf '<rss version="2.0">\n<channel>\n' >> "$FEED_FILE"
+            printf '<title>Deployment Feed: %s</title>\n' "${{ github.event.repository.name }}" >> "$FEED_FILE"
+            printf '<link>https://%s.github.io/%s/</link>\n' "${{ github.repository_owner }}" "${{ github.event.repository.name }}" >> "$FEED_FILE"
+            printf '<description>CI/CD Status Feed</description>\n' >> "$FEED_FILE"
+            printf '<lastBuildDate>%s</lastBuildDate>\n' "$PUB_DATE" >> "$FEED_FILE"
+            printf '<item>\n<title>%s</title>\n' "$TITLE" >> "$FEED_FILE"
+            printf '<link>https://github.com/%s/actions/runs/%s</link>\n' "${{ github.repository }}" "${{ github.run_id }}" >> "$FEED_FILE"
+            printf '<description>%s</description>\n' "$DESC" >> "$FEED_FILE"
+            printf '<pubDate>%s</pubDate>\n' "$PUB_DATE" >> "$FEED_FILE"
+            printf '<guid>%s-%s</guid>\n' "${{ github.sha }}" "$GITHUB_RUN_ID" >> "$FEED_FILE"
+            printf '</item>\n</channel>\n</rss>\n' >> "$FEED_FILE"
           fi
 
       - name: Save RSS History
