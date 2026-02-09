@@ -38,17 +38,23 @@ jobs:
             rss-storage-
 
       - name: Generate/Update RSS
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           mkdir -p public/feed
           PUB_DATE=$(date -R)
           FEED_FILE="public/feed/feed.xml"
           LIMIT=20
           
-          # Määritetään status ( ✅ tai ❌ )
+          # Määritetään status
           STATUS="${{ job.status == 'success' && '✅ SUCCESS' || '❌ FAILURE' }}"
-          TITLE="$STATUS | ${GITHUB_SHA:0:7} | ${{ github.event.head_commit.message }}"
-          DESC="Commit: ${{ github.event.head_commit.message }} | Tekijä: ${{ github.actor }}"
-
+          
+          # Otetaan vain commit-viestin ensimmäinen rivi ja siivotaan mahdolliset Bash-erikoismerkit
+          CLEAN_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '\r')
+          
+          TITLE="$STATUS | $CLEAN_MSG"
+          DESC="Tekijä: ${{ github.actor }} | ID: ${GITHUB_SHA:0:7}"
+          
           if [ -f "$FEED_FILE" ]; then
             echo "Päivitetään olemassa olevaa tiedostoa..."
             
