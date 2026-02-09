@@ -6,13 +6,11 @@ on:
       - main
   workflow_dispatch:
 
-# Oikeudet Actions-pohjaiseen Pages-julkaisuun
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Estetään päällekkäiset ajot (yksi julkaisu kerrallaan)
 concurrency:
   group: "pages"
   cancel-in-progress: false
@@ -24,11 +22,9 @@ jobs:
       - name: Checkout main branch
         uses: actions/checkout@v4
 
-      # 1. Asennetaan puuttuva työkalu
       - name: Install xmlstarlet
         run: sudo apt-get update && sudo apt-get install -y xmlstarlet
 
-      # 2. Haetaan edellisen ajon historia välimuistista
       - name: Restore RSS History
         uses: actions/cache/restore@v4
         with:
@@ -46,58 +42,49 @@ jobs:
           FEED_FILE="public/feed/feed.xml"
           LIMIT=20
           
-          # Määritetään status
           STATUS="${{ job.status == 'success' && '✅ SUCCESS' || '❌ FAILURE' }}"
-          
-          # Otetaan vain commit-viestin ensimmäinen rivi ja siivotaan mahdolliset Bash-erikoismerkit
           CLEAN_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '\r')
           
           TITLE="$STATUS | $CLEAN_MSG"
           DESC="Tekijä: ${{ github.actor }} | ID: ${GITHUB_SHA:0:7}"
-          
+
           if [ -f "$FEED_FILE" ]; then
             echo "Päivitetään olemassa olevaa tiedostoa..."
-            
-            # Lisätään uusi item loppuun
-            xmlstarlet ed -L -s "/rss/channel" -t elem -n "item" -v "" \
+            # Lisätään item ja päivitetään tiedot yhdellä xmlstarlet-ajolla
+            xmlstarlet ed -L \
+              -s "/rss/channel" -t elem -n "item" -v "" \
               -s "/rss/channel/item[last()]" -t elem -n "title" -v "$TITLE" \
               -s "/rss/channel/item[last()]" -t elem -n "link" -v "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
               -s "/rss/channel/item[last()]" -t elem -n "description" -v "$DESC" \
               -s "/rss/channel/item[last()]" -t elem -n "pubDate" -v "$PUB_DATE" \
               -s "/rss/channel/item[last()]" -t elem -n "guid" -v "${{ github.sha }}-$GITHUB_RUN_ID" \
+              -m "/rss/channel/item[last()]" "/rss/channel/title" \
+              -d "/rss/channel/item[position() > $LIMIT]" \
+              -u "/rss/channel/lastBuildDate" -v "$PUB_DATE" \
               "$FEED_FILE"
-            
-            # Siirretään uusin item ylimmäksi (heti <title> jälkeen)
-            xmlstarlet ed -L -m "/rss/channel/item[last()]" "/rss/channel/title" "$FEED_FILE"
-            
-            # Poistetaan vanhimmat jos ylittää rajan
-            xmlstarlet ed -L -d "/rss/channel/item[position() > $LIMIT]" "$FEED_FILE"
-            
-            # Päivitetään syötteen yleinen aikaleima
-            xmlstarlet ed -L -u "/rss/channel/lastBuildDate" -v "$PUB_DATE" "$FEED_FILE"
           else
             echo "Luodaan uusi tiedosto ensimmäistä kertaa..."
+            # TÄRKEÄÄ: Ei tyhjää tilaa ennen <?xml
             cat <<EOF > "$FEED_FILE"
-          <?xml version="1.0" encoding="UTF-8" ?>
-          <rss version="2.0">
-          <channel>
-            <title>Deployment Feed: ${{ github.event.repository.name }}</title>
-            <link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
-            <description>CI/CD Status Feed for Teams</description>
-            <lastBuildDate>$PUB_DATE</lastBuildDate>
-            <item>
-              <title>$TITLE</title>
-              <link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
-              <description>$DESC</description>
-              <pubDate>$PUB_DATE</pubDate>
-              <guid>${{ github.sha }}-$GITHUB_RUN_ID</guid>
-            </item>
-          </channel>
-          </rss>
-          EOF
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0">
+<channel>
+<title>Deployment Feed: ${{ github.event.repository.name }}</title>
+<link>https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/</link>
+<description>CI/CD Status Feed for Teams</description>
+<lastBuildDate>$PUB_DATE</lastBuildDate>
+<item>
+<title>$TITLE</title>
+<link>https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}</link>
+<description>$DESC</description>
+<pubDate>$PUB_DATE</pubDate>
+<guid>${{ github.sha }}-$GITHUB_RUN_ID</guid>
+</item>
+</channel>
+</rss>
+EOF
           fi
 
-      # 3. Tallennetaan historia välimuistiin
       - name: Save RSS History
         uses: actions/cache/save@v4
         if: always()
@@ -105,7 +92,6 @@ jobs:
           path: public
           key: rss-storage-${{ github.ref_name }}-${{ github.run_id }}
 
-      # 4. Julkaistaan Pagesiin
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
