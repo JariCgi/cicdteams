@@ -50,29 +50,19 @@ jobs:
 
           if [ -f "$FEED_FILE" ]; then
             echo "Päivitetään olemassa olevaa tiedostoa..."
-            
-            # 1. Lisätään uusi item-elementti suoraan kanavan (channel) alle
-            xmlstarlet ed -L -s "/rss/channel" -t elem -n "item" -v "" "$FEED_FILE"
-            
-            # 2. Täytetään juuri luodun (viimeisen) itemin tiedot
             xmlstarlet ed -L \
+              -s "/rss/channel" -t elem -n "item" -v "" \
               -s "/rss/channel/item[last()]" -t elem -n "title" -v "$TITLE" \
               -s "/rss/channel/item[last()]" -t elem -n "link" -v "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
               -s "/rss/channel/item[last()]" -t elem -n "description" -v "$DESC" \
               -s "/rss/channel/item[last()]" -t elem -n "pubDate" -v "$PUB_DATE" \
               -s "/rss/channel/item[last()]" -t elem -n "guid" -v "${{ github.sha }}-$GITHUB_RUN_ID" \
-              "$FEED_FILE"
-            
-            # 3. Järjestetään uusin ylimmäksi (heti description-tagin jälkeen)
-            xmlstarlet ed -L -m "/rss/channel/item[last()]" "/rss/channel/description" "$FEED_FILE"
-            
-            # 4. Pidetään vain LIMIT määrä ja päivitetään aikaleima
-            xmlstarlet ed -L \
+              -m "/rss/channel/item[last()]" "/rss/channel/description" \
               -d "/rss/channel/item[position() > $LIMIT]" \
               -u "/rss/channel/lastBuildDate" -v "$PUB_DATE" \
               "$FEED_FILE"
           else
-            echo "Luodaan puhdas pohja..."
+            echo "Luodaan uusi tiedosto puhtaalta pöydältä..."
             printf '<?xml version="1.0" encoding="UTF-8" ?>\n' > "$FEED_FILE"
             printf '<rss version="2.0">\n<channel>\n' >> "$FEED_FILE"
             printf '<title>Deployment Feed: %s</title>\n' "${{ github.event.repository.name }}" >> "$FEED_FILE"
@@ -80,7 +70,7 @@ jobs:
             printf '<description>CI/CD Status Feed</description>\n' >> "$FEED_FILE"
             printf '<lastBuildDate>%s</lastBuildDate>\n' "$PUB_DATE" >> "$FEED_FILE"
             printf '<item>\n<title>%s</title>\n' "$TITLE" >> "$FEED_FILE"
-            printf '<link>https://github.com/%s/actions/runs/%s</link>\n' "${{ github.repository }}" "${{ github.run_id }}" >> >> "$FEED_FILE"
+            printf '<link>https://github.com/%s/actions/runs/%s</link>\n' "${{ github.repository }}" "${{ github.run_id }}" >> "$FEED_FILE"
             printf '<description>%s</description>\n' "$DESC" >> "$FEED_FILE"
             printf '<pubDate>%s</pubDate>\n' "$PUB_DATE" >> "$FEED_FILE"
             printf '<guid>%s-%s</guid>\n' "${{ github.sha }}" "$GITHUB_RUN_ID" >> "$FEED_FILE"
