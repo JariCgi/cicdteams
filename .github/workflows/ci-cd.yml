@@ -24,7 +24,11 @@ jobs:
       - name: Checkout main branch
         uses: actions/checkout@v4
 
-      # 1. Haetaan edellisen ajon historia välimuistista
+      # 1. Asennetaan puuttuva työkalu
+      - name: Install xmlstarlet
+        run: sudo apt-get update && sudo apt-get install -y xmlstarlet
+
+      # 2. Haetaan edellisen ajon historia välimuistista
       - name: Restore RSS History
         uses: actions/cache/restore@v4
         with:
@@ -47,7 +51,8 @@ jobs:
 
           if [ -f "$FEED_FILE" ]; then
             echo "Päivitetään olemassa olevaa tiedostoa..."
-            # Lisätään uusi, järjestetään ja rajoitetaan LIMIT-määrään
+            
+            # Lisätään uusi item loppuun
             xmlstarlet ed -L -s "/rss/channel" -t elem -n "item" -v "" \
               -s "/rss/channel/item[last()]" -t elem -n "title" -v "$TITLE" \
               -s "/rss/channel/item[last()]" -t elem -n "link" -v "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
@@ -56,9 +61,13 @@ jobs:
               -s "/rss/channel/item[last()]" -t elem -n "guid" -v "${{ github.sha }}-$GITHUB_RUN_ID" \
               "$FEED_FILE"
             
-            # Siirretään uusin item ylimmäksi ja poistetaan vanhat
+            # Siirretään uusin item ylimmäksi (heti <title> jälkeen)
             xmlstarlet ed -L -m "/rss/channel/item[last()]" "/rss/channel/title" "$FEED_FILE"
+            
+            # Poistetaan vanhimmat jos ylittää rajan
             xmlstarlet ed -L -d "/rss/channel/item[position() > $LIMIT]" "$FEED_FILE"
+            
+            # Päivitetään syötteen yleinen aikaleima
             xmlstarlet ed -L -u "/rss/channel/lastBuildDate" -v "$PUB_DATE" "$FEED_FILE"
           else
             echo "Luodaan uusi tiedosto ensimmäistä kertaa..."
@@ -82,7 +91,7 @@ jobs:
           EOF
           fi
 
-      # 2. Tallennetaan päivitetty historia välimuistiin seuraavaa kertaa varten
+      # 3. Tallennetaan historia välimuistiin
       - name: Save RSS History
         uses: actions/cache/save@v4
         if: always()
@@ -90,7 +99,7 @@ jobs:
           path: public
           key: rss-storage-${{ github.ref_name }}-${{ github.run_id }}
 
-      # 3. Julkaistaan Pages-palveluun ilman haaraa
+      # 4. Julkaistaan Pagesiin
       - name: Setup Pages
         uses: actions/configure-pages@v4
 
@@ -102,4 +111,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
