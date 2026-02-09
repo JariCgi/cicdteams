@@ -41,7 +41,7 @@ jobs:
         run: |
           mkdir -p public
           PUB_DATE=$(date -R)
-          FEED_FILE="public/feed.xml"
+          FEED_FILE="feed/feed.xml"
           LIMIT=20
           
           # Määritetään status ( ✅ tai ❌ )
