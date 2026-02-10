@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout main branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Tärkeä: haetaan historia, jotta git log toimii
 
       - name: Install xmlstarlet
         run: sudo apt-get update && sudo apt-get install -y xmlstarlet
@@ -34,35 +36,47 @@ jobs:
             rss-storage-
 
       - name: Generate/Update RSS
-        env:
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           mkdir -p public/feed
           PUB_DATE=$(date -R)
           FEED_FILE="public/feed/feed.xml"
           LIMIT=20
           
-          STATUS="${{ job.status == 'success' && '✅ SUCCESS' || '❌ FAILURE' }}"
-          CLEAN_MSG=$(echo "$COMMIT_MSG" | head -n 1 | tr -d '\r')
+          # HAETAAN COMMIT-VIESTI JA TEKIJÄ SUORAAN GITISTÄ
+          RAW_MSG=$(git log -1 --pretty=%s)
+          AUTHOR_NAME=$(git log -1 --pretty=%an)
           
-          TITLE="$STATUS | $CLEAN_MSG"
-          DESC="Tekijä: ${{ github.actor }} | ID: ${GITHUB_SHA:0:7}"
+          STATUS="${{ job.status == 'success' && '✅ SUCCESS' || '❌ FAILURE' }}"
+          
+          # Muotoillaan Teamsin otsikko: Status | Viesti
+          TITLE="$STATUS | $RAW_MSG"
+          DESC="Tekijä: $AUTHOR_NAME | ID: ${GITHUB_SHA:0:7}"
 
           if [ -f "$FEED_FILE" ]; then
             echo "Päivitetään olemassa olevaa tiedostoa..."
+            
+            # 1. Lisätään uusi item-elementti
+            xmlstarlet ed -L -s "/rss/channel" -t elem -n "item" -v "" "$FEED_FILE"
+            
+            # 2. Täytetään tiedot (xmlstarlet hoitaa XML-suojauksen automaattisesti)
             xmlstarlet ed -L \
-              -s "/rss/channel" -t elem -n "item" -v "" \
               -s "/rss/channel/item[last()]" -t elem -n "title" -v "$TITLE" \
               -s "/rss/channel/item[last()]" -t elem -n "link" -v "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
               -s "/rss/channel/item[last()]" -t elem -n "description" -v "$DESC" \
               -s "/rss/channel/item[last()]" -t elem -n "pubDate" -v "$PUB_DATE" \
               -s "/rss/channel/item[last()]" -t elem -n "guid" -v "${{ github.sha }}-$GITHUB_RUN_ID" \
-              -m "/rss/channel/item[last()]" "/rss/channel/description" \
+              "$FEED_FILE"
+            
+            # 3. Järjestetään uusin ylimmäksi (heti description-tagin jälkeen)
+            xmlstarlet ed -L -m "/rss/channel/item[last()]" "/rss/channel/description" "$FEED_FILE"
+            
+            # 4. Siivous ja aikaleima
+            xmlstarlet ed -L \
               -d "/rss/channel/item[position() > $LIMIT]" \
               -u "/rss/channel/lastBuildDate" -v "$PUB_DATE" \
               "$FEED_FILE"
           else
-            echo "Luodaan uusi tiedosto puhtaalta pöydältä..."
+            echo "Luodaan uusi puhdas tiedosto..."
             printf '<?xml version="1.0" encoding="UTF-8" ?>\n' > "$FEED_FILE"
             printf '<rss version="2.0">\n<channel>\n' >> "$FEED_FILE"
             printf '<title>Deployment Feed: %s</title>\n' "${{ github.event.repository.name }}" >> "$FEED_FILE"
