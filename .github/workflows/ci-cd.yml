@@ -22,7 +22,7 @@ jobs:
       - name: Checkout main branch
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Tärkeä: haetaan historia, jotta git log toimii
+          fetch-depth: 0 # Haetaan historia, jotta git log löytää viestin
 
       - name: Install xmlstarlet
         run: sudo apt-get update && sudo apt-get install -y xmlstarlet
@@ -42,23 +42,21 @@ jobs:
           FEED_FILE="public/feed/feed.xml"
           LIMIT=20
           
-          # HAETAAN COMMIT-VIESTI JA TEKIJÄ SUORAAN GITISTÄ
+          # Haetaan commit-viestin otsikko ja tekijä suoraan gitistä
           RAW_MSG=$(git log -1 --pretty=%s)
           AUTHOR_NAME=$(git log -1 --pretty=%an)
           
           STATUS="${{ job.status == 'success' && '✅ SUCCESS' || '❌ FAILURE' }}"
           
-          # Muotoillaan Teamsin otsikko: Status | Viesti
           TITLE="$STATUS | $RAW_MSG"
           DESC="Tekijä: $AUTHOR_NAME | ID: ${GITHUB_SHA:0:7}"
 
           if [ -f "$FEED_FILE" ]; then
             echo "Päivitetään olemassa olevaa tiedostoa..."
             
-            # 1. Lisätään uusi item-elementti
+            # Lisätään uusi item ja täytetään tiedot
             xmlstarlet ed -L -s "/rss/channel" -t elem -n "item" -v "" "$FEED_FILE"
             
-            # 2. Täytetään tiedot (xmlstarlet hoitaa XML-suojauksen automaattisesti)
             xmlstarlet ed -L \
               -s "/rss/channel/item[last()]" -t elem -n "title" -v "$TITLE" \
               -s "/rss/channel/item[last()]" -t elem -n "link" -v "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
@@ -67,10 +65,10 @@ jobs:
               -s "/rss/channel/item[last()]" -t elem -n "guid" -v "${{ github.sha }}-$GITHUB_RUN_ID" \
               "$FEED_FILE"
             
-            # 3. Järjestetään uusin ylimmäksi (heti description-tagin jälkeen)
+            # Siirretään uusin heti descriptionin jälkeen
             xmlstarlet ed -L -m "/rss/channel/item[last()]" "/rss/channel/description" "$FEED_FILE"
             
-            # 4. Siivous ja aikaleima
+            # Siivous
             xmlstarlet ed -L \
               -d "/rss/channel/item[position() > $LIMIT]" \
               -u "/rss/channel/lastBuildDate" -v "$PUB_DATE" \
